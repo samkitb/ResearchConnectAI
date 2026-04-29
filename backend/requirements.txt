@@ -1,0 +1,15 @@
+numpy==1.24.4
+Flask==2.3.2
+flask-cors==4.0.0
+pandas==2.0.3
+rapidfuzz==3.6.1
+pyalex==0.18
+requests==2.31.0
+beautifulsoup4==4.12.2
+ddgs==9.5.2
+openai==1.98.0
+bcrypt==3.2.0
+mysql-connector-python==9.4.0
+PyJWT==2.8.0
+python-dotenv==1.1.0
+
