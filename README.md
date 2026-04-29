@@ -1,6 +1,6 @@
 # Research Connect AI
 
-A full-stack web application that helps students find and connect with university faculty for research opportunities. Search by field of study and university, discover professors' published work, and generate personalized outreach emails — all powered by OpenAI and the OpenAlex academic database.
+A full-stack web application that helps students discover and connect with university professors for research opportunities. Search any university and field of study — GPT identifies relevant professors, OpenAlex enriches their profiles with real publications, and an AI email drafter helps you craft personalized outreach.
 
 **Live site:** [researchconnectai.com](https://researchconnectai.com)
 
@@ -8,28 +8,21 @@ A full-stack web application that helps students find and connect with universit
 
 ## Features
 
-- **Smart Faculty Search** — Find professors by field of study and university using fuzzy matching against a curated faculty database, with GPT-powered fallback for broader searches
-- **Professor Profiles** — View detailed profiles including research areas, recent publications, citation counts, and abstracts pulled from OpenAlex
-- **AI Email Drafting** — Generate personalized cold-outreach emails to professors using OpenAI, tailored to your interests and their research
-- **Email Discovery** — Automatically scrapes and caches faculty email addresses from university directories and the web
-- **User Accounts** — Sign up, log in, and track your outreach with a personal dashboard
-- **Connection Tracker** — Save professors you've contacted and track response status (pending, responded, no response)
-- **Visitor Metrics** — Built-in anonymous visit tracking
+- **GPT-Powered Professor Search** — Enter any university and field of study. GPT-4.1 identifies up to 15 relevant professors, then each result is enriched with real academic data from [OpenAlex](https://openalex.org)
+- **Professor Profiles** — View detailed profiles including research areas, recent publications with citation counts, abstracts, and journal info — all pulled live from OpenAlex
+- **AI Email Drafting** — Generate personalized cold-outreach emails using GPT-4o, tailored to the professor's actual research and publications
+- **Email Discovery** — Automatically scrapes and caches faculty email addresses from university websites using DuckDuckGo search and BeautifulSoup
+- **User Accounts** — JWT-based authentication with sign up, login, and a personal dashboard
+- **Connection Tracker** — Save professors you've contacted and track their response status (pending, responded, no response)
+- **Visitor Metrics** — Built-in anonymous visit tracking with cookie-based deduplication
 
-## Universities Covered
+## How It Works
 
-The faculty database currently includes departments across **16 universities**:
-
-| | | |
-|---|---|---|
-| Caltech | MIT | Stanford |
-| Carnegie Mellon | Princeton | UC Florida |
-| Columbia | Purdue | U of Florida |
-| Florida Atlantic | U of Miami | U of Pennsylvania |
-| Florida State | U of Washington | U of Wisconsin–Madison |
-| Georgia Tech | | |
-
-Departments span Computer Science, Electrical Engineering, Mechanical Engineering, Chemical Engineering, Biomedical Engineering, Physics, Chemistry, Biology, Mathematics, Psychology, and more.
+1. **Student searches** for a field (e.g. "Machine Learning") at a university (e.g. "Stanford")
+2. **GPT-4.1** returns a list of professors matching that criteria
+3. **OpenAlex** enriches each professor with a verified academic ID, research topics, recent papers, and citation data
+4. **Email scraper** attempts to find each professor's contact email from the web
+5. Student can view a professor's full profile and **generate a personalized outreach email** with one click
 
 ## Tech Stack
 
@@ -42,42 +35,34 @@ Departments span Computer Science, Electrical Engineering, Mechanical Engineerin
 
 ### Backend
 - **Flask** (Python) REST API
-- **OpenAI API** for email generation and GPT-powered professor search
-- **OpenAlex API** for academic publication data
-- **PyAlex** for OpenAlex integration
-- **RapidFuzz** for fuzzy string matching
-- **BeautifulSoup** for web scraping faculty emails
-- **MySQL** (Railway) for user accounts and connections
-- **JWT** for authentication
-- **bcrypt** for password hashing
+- **OpenAI API** — GPT-4.1 for professor search, GPT-4o for email generation
+- **OpenAlex API** via **PyAlex** — academic publication data, author profiles, research topics
+- **DuckDuckGo Search** (ddgs) + **BeautifulSoup** — faculty email scraping
+- **RapidFuzz** — fuzzy string matching for name/topic resolution
+- **MySQL** on Railway — user accounts and saved connections
+- **JWT** + **bcrypt** — authentication and password hashing
 
 ## Project Structure
 
 ```
 research-helper/
 ├── backend/
-│   ├── app.py              # Flask API (all routes and logic)
+│   ├── app.py              # Flask API — all routes and logic
 │   ├── requirements.txt    # Python dependencies
 │   ├── .env                # Environment variables (not committed)
-│   └── Faculty/            # CSV files of faculty data by university
-│       ├── MIT/
-│       ├── Stanford/
-│       ├── CMU/
-│       └── ...
+│   └── Faculty/            # Legacy CSV data (not used in primary search)
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx         # Main app with routing
-│   │   ├── components/
-│   │   │   ├── HomePage.tsx
-│   │   │   ├── FacultyFinder.tsx
-│   │   │   ├── ProfessorDetailPage.tsx
-│   │   │   ├── UserDashboard.tsx
-│   │   │   ├── LoginPage.tsx
-│   │   │   ├── SignupPage.tsx
-│   │   │   └── ...
-│   │   └── types/
-│   ├── package.json
-│   └── ...
+│   │   └── components/
+│   │       ├── HomePage.tsx
+│   │       ├── FacultyFinder.tsx
+│   │       ├── ProfessorDetailPage.tsx
+│   │       ├── UserDashboard.tsx
+│   │       ├── LoginPage.tsx
+│   │       ├── SignupPage.tsx
+│   │       └── ...
+│   └── package.json
 └── README.md
 ```
 
@@ -87,8 +72,8 @@ research-helper/
 
 - Python 3.10+
 - Node.js 18+
-- An [OpenAI API key](https://platform.openai.com/api-keys)
-- A MySQL database (e.g. [Railway](https://railway.app))
+- [OpenAI API key](https://platform.openai.com/api-keys)
+- MySQL database (e.g. [Railway](https://railway.app))
 
 ### Backend Setup
 
@@ -130,24 +115,23 @@ npm install
 npm run dev
 ```
 
-The frontend runs on `http://localhost:5173` and proxies API calls to the backend.
+The frontend runs on `http://localhost:5173`.
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/find-professors` | Search faculty by field and university |
-| `POST` | `/gptprofessorsearch` | GPT-powered professor discovery |
-| `GET` | `/professors/:id` | Get professor profile with publications |
+| `POST` | `/gptprofessorsearch` | GPT-powered professor discovery + OpenAlex enrichment |
+| `GET` | `/professors/:id` | Full professor profile with publications |
 | `POST` | `/draft-email` | Generate a personalized outreach email |
-| `GET` | `/options` | Get available universities and departments |
+| `GET` | `/options` | Available universities and departments |
 | `POST` | `/auth/signup` | Create a new account |
 | `POST` | `/auth/login` | Log in and receive JWT |
 | `GET` | `/user/connections` | Get saved connections (auth required) |
 | `POST` | `/user/connections` | Save a new connection (auth required) |
 | `PATCH` | `/user/connections/:id` | Update connection status (auth required) |
 | `DELETE` | `/user/connections/:id` | Remove a connection (auth required) |
-| `GET` | `/metrics` | Get visitor metrics |
+| `GET` | `/metrics` | Visitor metrics |
 
 ## License
 
