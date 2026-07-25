@@ -9,6 +9,8 @@ interface FacultyMember {
   title?: string;
   university: string;
   department: string;
+  researchAreas?: string[];
+  citationCount?: number;
 }
 
 //const API_BASE = "https://finalresearchhelper-production.up.railway.app";
@@ -51,6 +53,8 @@ const FacultyFinder: React.FC = () => {
         title: p.title,
         university: p.university,
         department: p.department,
+        researchAreas: p.researchAreas || [],
+        citationCount: p.citationCount,
       }));
 
       return list;
@@ -177,6 +181,23 @@ const FacultyFinder: React.FC = () => {
                             <p className="text-sm text-gray-500">
                               {faculty.university} • {faculty.department}
                             </p>
+                            {typeof faculty.citationCount === "number" && faculty.citationCount > 0 && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                📚 {faculty.citationCount.toLocaleString()} recent citations in this field
+                              </p>
+                            )}
+                            {faculty.researchAreas && faculty.researchAreas.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 mt-2">
+                                {faculty.researchAreas.slice(0, 4).map((area) => (
+                                  <span
+                                    key={area}
+                                    className="px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-full border border-blue-100"
+                                  >
+                                    {area}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="flex space-x-3">

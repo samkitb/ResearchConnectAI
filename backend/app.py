@@ -53,7 +53,20 @@ CORS(
 # export OPENAI_API_KEY="put code here"
 
 
-client = OpenAI()
+try:
+    client = OpenAI()
+except Exception as _e:
+    client = None
+    print(f"[WARN] OpenAI client unavailable: {_e}")
+
+# Anthropic (Claude) is used for email drafting instead of OpenAI.
+try:
+    from anthropic import Anthropic
+    anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) if os.getenv("ANTHROPIC_API_KEY") else None
+except Exception as _e:
+    anthropic_client = None
+    print(f"[WARN] Anthropic client unavailable: {_e}")
+
 pyalex.config.email = os.getenv("PYALEX_EMAIL", "")
 
 # -------- Faculty directory base --------
@@ -515,31 +528,36 @@ def draft_email():
 
         # Prepare prompt
         email_prompt = f"""
-        Subject: Inquiry About Research Opportunities
-        Dear Professor [Last Name],
-        I hope this email finds you well. My name is {student_name}, and I am a high school student passionate about {student_interests}. 
-        I am reaching out to express my strong interest in your research on {research_areas}.
-        I was particularly intrigued by {notable_paper}
-        Given my background in {student_skills}, I believe I could contribute meaningfully to your research.
-        Please let me know if you have any volunteer openings or if you could refer me to somebody who might have an opportunity for me. 
-        I appreciate your time and consideration and look forward to hearing from you.
-        Best regards,
-        {student_name}
-        [Email: placeholder@domain.com]
-        """
+Write a concise, professional cold-outreach email from a student to a professor about research opportunities.
 
-        # ✅ New OpenAI client usage
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that writes professional outreach emails for students contacting professors about research opportunities."},
-                {"role": "user", "content": email_prompt}
-            ],
-            max_tokens=350,
-            temperature=0.7
+Student name: {student_name}
+Student interests: {student_interests}
+Student skills: {student_skills}
+Professor: {professor_name}
+Professor's research areas: {research_areas}
+{("Notable recent work: " + notable_paper) if notable_paper else ""}
+
+Rules:
+- Address the professor by their actual last name (derived from "{professor_name}"). Never leave bracketed placeholders like [Last Name] or [Email].
+- Three short paragraphs: (1) who the student is and a genuine interest, (2) a specific, informed reference to the professor's research, (3) a clear ask for research or volunteer opportunities plus openness to referrals.
+- Warm and specific, not sycophantic. About 150 words.
+- End with "Best regards," then the student's name on the next line. Do not invent an email address or phone number.
+Return only the finished email.
+"""
+
+        if anthropic_client is None:
+            return jsonify({"error": "Email drafting is not configured (missing ANTHROPIC_API_KEY)."}), 503
+
+        message = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            temperature=0.7,
+            system="You write professional, concise, personalized research-outreach emails for students contacting professors. Reference the professor's actual research naturally. Return only the finished email body, ready to send — no preamble.",
+            messages=[{"role": "user", "content": email_prompt}],
         )
-
-        email_draft = response.choices[0].message.content.strip()
+        email_draft = "".join(
+            block.text for block in message.content if getattr(block, "type", "") == "text"
+        ).strip()
 
         return jsonify({"draft": email_draft}), 200
 
@@ -1039,124 +1057,142 @@ def get_metrics():
 # NEW ENDPOINT: Professors by School + Field
 # =========================================================
 
+# ---------- OpenAlex professor discovery (works-first, no LLM, no hallucination) ----------
+OPENALEX_BASE = "https://api.openalex.org"
+
+def _openalex_get(path, params):
+    q = dict(params)
+    q["mailto"] = os.getenv("PYALEX_EMAIL") or "research@researchconnectai.com"
+    resp = requests.get(f"{OPENALEX_BASE}{path}", params=q, timeout=25)
+    resp.raise_for_status()
+    return resp.json()
+
+def resolve_institution(name):
+    """Return (short_id, display_name) for the best-matching institution, or (None, None)."""
+    try:
+        data = _openalex_get("/institutions", {"search": name, "per_page": 1})
+        results = data.get("results", [])
+        if results:
+            return results[0]["id"].split("/")[-1], results[0].get("display_name")
+    except Exception as e:
+        print(f"[WARN] resolve_institution: {e}")
+    return None, None
+
+def resolve_concept(field):
+    """Return the OpenAlex concept short id best matching the field, or None."""
+    try:
+        data = _openalex_get("/concepts", {"search": field, "per_page": 1})
+        results = data.get("results", [])
+        if results:
+            return results[0]["id"].split("/")[-1]
+    except Exception as e:
+        print(f"[WARN] resolve_concept: {e}")
+    return None
+
+def discover_professors(inst_id, inst_name, field, concept_id, limit=15):
+    """
+    Find REAL researchers affiliated with an institution who actively publish in a field,
+    by aggregating recent, highly-cited works from OpenAlex. No LLM, no hallucination.
+    """
+    filt = f"authorships.institutions.id:{inst_id},from_publication_date:2019-01-01"
+    if concept_id:
+        filt += f",concepts.id:{concept_id}"
+    params = {"filter": filt, "sort": "cited_by_count:desc", "per_page": 60}
+    if not concept_id:
+        params["search"] = field  # fall back to keyword search if field isn't a known concept
+
+    data = _openalex_get("/works", params)
+    agg = {}
+    for work in data.get("results", []):
+        cites = work.get("cited_by_count") or 0
+        work_areas = [c.get("display_name") for c in (work.get("concepts") or [])[:4] if c.get("display_name")]
+        source = ((work.get("primary_location") or {}).get("source") or {}).get("display_name", "")
+        for au in work.get("authorships", []):
+            if not any(inst_id in (i.get("id") or "") for i in au.get("institutions", [])):
+                continue
+            author = au.get("author") or {}
+            aid = author.get("id")
+            if not aid:
+                continue
+            sid = aid.split("/")[-1]
+            entry = agg.setdefault(sid, {
+                "id": sid, "name": author.get("display_name", "Unknown"),
+                "papers": 0, "cites": 0, "areas": {}, "recent": []
+            })
+            entry["papers"] += 1
+            entry["cites"] += cites
+            for area in work_areas:
+                entry["areas"][area] = entry["areas"].get(area, 0) + 1
+            if work.get("title") and len(entry["recent"]) < 3:
+                entry["recent"].append({
+                    "title": work["title"],
+                    "citations": cites,
+                    "year": work.get("publication_year"),
+                    "journal": source,
+                    "abstract": "",
+                })
+
+    ranked = sorted(agg.values(), key=lambda x: (-x["papers"], -x["cites"]))[:limit]
+    professors = []
+    for p in ranked:
+        areas = [a for a, _ in sorted(p["areas"].items(), key=lambda kv: -kv[1])[:5]] or [field]
+        professors.append({
+            "id": p["id"],
+            "name": p["name"],
+            "department": areas[0],
+            "title": areas[0],
+            "email": "Not Available",
+            "university": inst_name or "",
+            "researchAreas": areas,
+            "recentPapers": p["recent"],
+            "citationCount": p["cites"],
+            "biography": "",
+        })
+    return professors
+
 @app.route("/gptprofessorsearch", methods=["POST"])
 def search_professors():
     """
-    Request JSON:
-    {
-      "school": "Stanford University",
-      "field": "Artificial Intelligence"
-    }
-    Returns JSON with professors, enriched with OpenAlex info and stable IDs.
+    Request JSON: { "school": "Stanford University", "field": "Machine Learning" }
+    Returns real, affiliation-verified researchers active in the field (OpenAlex works-first).
     """
     try:
-        data = request.get_json()
-        school = data.get("school", "").strip()
-        field = data.get("field", "").strip()
-
+        data = request.get_json() or {}
+        school = (data.get("school") or "").strip()
+        field = (data.get("field") or "").strip()
         if not school or not field:
-            return jsonify({"error": "Missing 'school' or 'field'"}), 400
+            return jsonify({"error": "Please provide both a university and a field of study."}), 400
 
-        # Step 1: Ask GPT to suggest professors
-        gpt_prompt = f"""
-        Provide a JSON array of up to 15 professors at {school} who specialize in {field}.
-        Each object must have: name, department, and (if available) email.
-        If email is unknown, use "Not Available".
-        Return valid JSON only.
-        """
+        inst_id, inst_name = resolve_institution(school)
+        if not inst_id:
+            return jsonify({"error": f"Couldn't find a university matching '{school}'. Try the full official name."}), 404
 
-        gpt_response = client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[
-                {"role": "system", "content": "You return only clean JSON, no commentary."},
-                {"role": "user", "content": gpt_prompt},
-            ],
-            max_tokens=800,
-            temperature=0.3
-        )
+        concept_id = resolve_concept(field)
+        professors = discover_professors(inst_id, inst_name or school, field, concept_id, limit=15)
+        if not professors:
+            return jsonify({"error": f"No active researchers found at {inst_name or school} in '{field}'. Try a broader field."}), 404
 
-        raw_text = gpt_response.choices[0].message.content.strip()
-
-        # Step 2: Parse GPT JSON safely
-        try:
-            prof_list = json.loads(raw_text)
-        except Exception:
-            # fallback: parse lines but filter invalid entries
-            prof_list = []
-            for line in raw_text.split("\n"):
-                line = line.strip()
-                if line and not line.startswith(("N/A", "•", "Quick Email", "Learn More")):
-                    prof_list.append({"name": line, "department": field, "email": "Not Available"})
-
-        enriched_professors = []
-
-        for prof in prof_list:
-            name = prof.get("name", "").strip()
-            dept = prof.get("department", "").strip()
-            email = is_valid_email_text(prof.get("email", "")) or "Email Not Available"
-
-            # Step 3: Try to get OpenAlex ID
-            oa_id = get_openalex_id_for_prof(name, school)
-            # If we got a full URL, extract the short ID
-            # Normalize to short ID
-            if oa_id.startswith("https://openalex.org/authors/"):
-                short_id = oa_id.split("/")[-1]  # "A5086173064"
-            elif oa_id.startswith("authors/"):
-                short_id = oa_id.split("/")[-1]  # remove the "authors/" prefix
-            else:
-                short_id = oa_id  # already short ID
-            
-            oa_id = short_id
-            # if oa_id and not oa_id.startswith("http"):
-            #     oa_id = f"https://openalex.org/{oa_id}"
-
-            # Step 4: Generate stable fallback ID if OpenAlex fails
-            prof_id = oa_id or f"{name.lower().replace(' ', '-')}-{school.lower().replace(' ', '-')}"
-
-            research_areas, recent_papers, biography = [], [], ""
-
-            if oa_id:
-                try:
-                    author = Authors()[oa_id]
-                    if author:
-                        xconcepts = author.get("x_concepts") or []
-                        research_areas = [c.get("display_name") for c in xconcepts if c.get("display_name")]
-                        recent_papers = fetch_recent_papers(oa_id, max_papers=5)
-                        biography = author.get("biography") or ""
-                except Exception as e:
-                    print(f"[WARN] Could not fetch OpenAlex info for {name}: {e}")
-
-            enriched_professors.append({
-                "id": prof_id,
-                "name": name,
-                "department": dept,
-                "email": email or "Not Available",
-                "university": school,
-                "researchAreas": research_areas,
-                "recentPapers": recent_papers,
-                "biography": biography
-            })
-
-        # Step 5: Filter out malformed entries
-        enriched_professors = [
-            p for p in enriched_professors if p.get("name") and p.get("department")
-        ]
-
-        return jsonify({"professors": enriched_professors}), 200
+        return jsonify({"professors": professors}), 200
 
     except Exception as e:
         print(f"[ERROR] /gptprofessorsearch failed: {e}")
         return jsonify({"error": "Failed to fetch professors"}), 500
-    
+
+
 # MySQL Shi ________________________________________________
-db = mysql.connector.connect(
-    host=os.getenv("DB_HOST"),
-    user=os.getenv("DB_USER"),
-    password=os.getenv("DB_PASSWORD"),
-    database=os.getenv("DB_NAME"),
-    port=int(os.getenv("DB_PORT", "3306"))
-)
-cursor = db.cursor()
+try:
+    db = mysql.connector.connect(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        database=os.getenv("DB_NAME"),
+        port=int(os.getenv("DB_PORT", "3306"))
+    )
+    cursor = db.cursor()
+except Exception as _e:
+    print(f"[WARN] Database unavailable at startup (auth/connections disabled): {_e}")
+    db = None
+    cursor = None
 
 def get_db():
     global db
