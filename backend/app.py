@@ -1208,8 +1208,45 @@ def get_db():
         )
     return db
 
+
+# --- Local dev auth fallback (used ONLY when no database is configured, e.g. local dev) ---
+DB_ENABLED = db is not None
+DEV_USERS = {}  # email -> {id, name, email, pw}
+
+def _issue_token(uid):
+    return jwt.encode(
+        {"id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7)},
+        app.config["SECRET_KEY"], algorithm="HS256"
+    )
+
+def _dev_signup():
+    data = request.get_json() or {}
+    name = (data.get("name") or "Dev User").strip()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    if not email or not password:
+        return jsonify({"message": "All fields are required"}), 400
+    if email in DEV_USERS:
+        return jsonify({"message": "Email already registered"}), 400
+    uid = len(DEV_USERS) + 1
+    DEV_USERS[email] = {"id": uid, "name": name, "email": email,
+                        "pw": bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()}
+    return jsonify({"token": _issue_token(uid), "user": {"id": uid, "name": name, "email": email}})
+
+def _dev_login():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    u = DEV_USERS.get(email)
+    if not u or not bcrypt.checkpw(password.encode(), u["pw"].encode()):
+        return jsonify({"message": "Invalid email or password (dev mode — sign up first)"}), 401
+    return jsonify({"token": _issue_token(u["id"]), "user": {"id": u["id"], "name": u["name"], "email": u["email"]}})
+
+
 @app.route("/auth/signup", methods=["POST"])
 def signup():
+    if not DB_ENABLED:
+        return _dev_signup()
     db = get_db()
     cursor = db.cursor(dictionary=True)
 
@@ -1265,6 +1302,8 @@ def signup():
 
 @app.route("/auth/login", methods=["POST"])
 def login():
+    if not DB_ENABLED:
+        return _dev_login()
     db = get_db()
     cursor = db.cursor(dictionary=True)
 
