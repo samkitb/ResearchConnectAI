@@ -3,7 +3,7 @@
 # =========================================================
 
 from pathlib import Path
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, g
 from flask_cors import CORS
 import pandas as pd
 import time
@@ -1208,40 +1208,76 @@ def search_professors():
         return jsonify({"error": "Failed to fetch professors"}), 500
 
 
-# MySQL Shi ________________________________________________
-try:
-    db = mysql.connector.connect(
+# MySQL ________________________________________________
+def _db_config():
+    return dict(
         host=os.getenv("DB_HOST"),
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
         database=os.getenv("DB_NAME"),
         port=int(os.getenv("DB_PORT", "3306")),
-        connection_timeout=10
+        connection_timeout=8,
     )
-    cursor = db.cursor()
-except Exception as _e:
-    print(f"[WARN] Database unavailable at startup (auth/connections disabled): {_e}")
-    db = None
-    cursor = None
+
+# In-memory dev auth is used ONLY when no database is configured at all (local dev).
+# A configured-but-unreachable DB must fail loudly, never silently fall back.
+DB_ENABLED = bool(os.getenv("DB_HOST"))
+
+SCHEMA_SQL = [
+    """CREATE TABLE IF NOT EXISTS users2 (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS user_connections (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        professor_name VARCHAR(255),
+        university VARCHAR(255),
+        email VARCHAR(255),
+        field VARCHAR(255),
+        status VARCHAR(32) DEFAULT 'pending',
+        date_contacted TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user (user_id)
+    )""",
+]
+_schema_ready = False
 
 def get_db():
-    global db
-    try:
-        db.ping(reconnect=True, attempts=3, delay=2)
-    except:
-        db = mysql.connector.connect(
-            host=os.getenv("DB_HOST"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD"),
-            database=os.getenv("DB_NAME"),
-            port=int(os.getenv("DB_PORT", "3306")),
-            connection_timeout=10
-        )
-    return db
+    """One connection per request, closed automatically at the end of the request."""
+    global _schema_ready
+    if "db" not in g:
+        g.db = mysql.connector.connect(**_db_config())
+        if not _schema_ready:
+            try:
+                cur = g.db.cursor()
+                for stmt in SCHEMA_SQL:
+                    cur.execute(stmt)
+                g.db.commit()
+                cur.close()
+                _schema_ready = True
+            except Exception as e:
+                print(f"[WARN] schema check failed: {e}")
+    return g.db
+
+@app.teardown_appcontext
+def _close_db(exc):
+    conn = g.pop("db", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+@app.errorhandler(mysql.connector.Error)
+def _db_error(e):
+    print(f"[ERROR] database error: {e}")
+    return jsonify({"message": "The service is temporarily unavailable. Please try again shortly."}), 503
 
 
 # --- Local dev auth fallback (used ONLY when no database is configured, e.g. local dev) ---
-DB_ENABLED = db is not None
 DEV_USERS = {}  # email -> {id, name, email, pw}
 
 def _issue_token(uid):
@@ -1274,107 +1310,93 @@ def _dev_login():
     return jsonify({"token": _issue_token(u["id"]), "user": {"id": u["id"], "name": u["name"], "email": u["email"]}})
 
 
+def _issue_auth_response(user_id, name, email, created_at=None):
+    token = jwt.encode(
+        {"id": user_id, "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)},
+        app.config["SECRET_KEY"],
+        algorithm="HS256"
+    )
+    user = {"id": user_id, "name": name, "email": email}
+    if created_at:
+        user["createdAt"] = created_at
+    return jsonify({"token": token, "user": user})
+
+
 @app.route("/auth/signup", methods=["POST"])
 def signup():
     if not DB_ENABLED:
         return _dev_signup()
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
 
-    data = request.get_json()
-    name = data.get("name")
-    email = data.get("email")
-    password = data.get("password")
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
 
     if not name or not email or not password:
         return jsonify({"message": "All fields are required"}), 400
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return jsonify({"message": "Please enter a valid email address"}), 400
+    if len(password) < 6:
+        return jsonify({"message": "Password must be at least 6 characters"}), 400
 
+    db = get_db()
     cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id FROM users2 WHERE email = %s", (email,))
+        if cursor.fetchone():
+            return jsonify({"message": "Email already registered"}), 400
 
-    # Check if user already exists
-    cursor.execute("SELECT id FROM users2 WHERE email = %s", (email,))
-    if cursor.fetchone():
+        hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        try:
+            cursor.execute(
+                "INSERT INTO users2 (name, email, password_hash, created_at) VALUES (%s, %s, %s, NOW())",
+                (name, email, hashed_pw)
+            )
+            db.commit()
+        except mysql.connector.IntegrityError:
+            # Two signups for the same email raced; the unique key caught it.
+            return jsonify({"message": "Email already registered"}), 400
+        user_id = cursor.lastrowid
+    finally:
         cursor.close()
-        return jsonify({"message": "Email already registered"}), 400
 
-    # Hash the password
-    hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
-
-    # Insert into database
-    cursor.execute(
-        "INSERT INTO users2 (name, email, password_hash, created_at) VALUES (%s, %s, %s, NOW())",
-        (name, email, hashed_pw.decode("utf-8"))
-    )
-    db.commit()
-    user_id = cursor.lastrowid
-
-    cursor.close()
-
-    # Create JWT token
-    token = jwt.encode(
-        {"id": user_id, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7)},
-        app.config["SECRET_KEY"],
-        algorithm="HS256"
-    )
-
-    cursor.close()
-    db.close()
-
-    return jsonify({
-        "token": token,
-        "user": {
-            "id": user_id,
-            "name": name,
-            "email": email,
-            "createdAt": datetime.datetime.utcnow().isoformat()
-        }
-    })
+    return _issue_auth_response(user_id, name, email, datetime.datetime.utcnow().isoformat())
 
 
 @app.route("/auth/login", methods=["POST"])
 def login():
     if not DB_ENABLED:
         return _dev_login()
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
 
-    data = request.get_json()
-    email = data.get("email")
-    password = data.get("password")
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
 
     if not email or not password:
         return jsonify({"message": "Email and password are required"}), 400
 
+    db = get_db()
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT id, name, email, password_hash FROM users2 WHERE email = %s", (email,))
-    user = cursor.fetchone()
-    cursor.close()
+    try:
+        cursor.execute("SELECT id, name, email, password_hash FROM users2 WHERE email = %s", (email,))
+        user = cursor.fetchone()
+    finally:
+        cursor.close()
 
     if not user:
         return jsonify({"message": "Invalid email or password"}), 401
 
-    # Verify password
-    if not bcrypt.checkpw(password.encode("utf-8"), user["password_hash"].encode("utf-8")):
+    stored = user["password_hash"]
+    if isinstance(stored, (bytes, bytearray)):
+        stored = stored.decode("utf-8")
+    try:
+        ok = bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
+    except ValueError:
+        ok = False
+    if not ok:
         return jsonify({"message": "Invalid email or password"}), 401
 
-    # Create JWT
-    token = jwt.encode(
-        {"id": user["id"], "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)},
-        app.config["SECRET_KEY"],
-        algorithm="HS256"
-    )
-
-    cursor.close()
-    db.close()
-
-    return jsonify({
-        "token": token,
-        "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"]
-        }
-    })
+    return _issue_auth_response(user["id"], user["name"], user["email"])
 
 #Check login------------
 def token_required(f):
