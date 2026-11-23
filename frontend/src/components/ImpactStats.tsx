@@ -44,7 +44,7 @@ export function useMetrics() {
   useEffect(() => {
     let cancelled = false;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const timer = setTimeout(() => ctrl.abort(), 4000);
     fetch(`${API_BASE}/metrics`, { signal: ctrl.signal })
       .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(d => { if (!cancelled) setMetrics(d); })
@@ -62,25 +62,27 @@ const items: { key: keyof Metrics; label: string; icon: string; tone: string }[]
   { key: 'faculty_contacts', label: 'Faculty contacts saved', icon: '✉️', tone: 'from-emerald-500 to-teal-500' },
 ];
 
+// Shown only when the API can't be reached, so the section is never blank.
+// Faculty contacts has no baseline, so it is omitted in this state.
+const FALLBACK: Partial<Metrics> = { students_connected: 500, universities_covered: 2500 };
+
 type Props = { compact?: boolean; hide?: (keyof Metrics)[] };
 
 const ImpactStats: React.FC<Props> = ({ compact = false, hide = [] }) => {
   const { metrics, failed } = useMetrics();
-  const shown = items.filter(i => !hide.includes(i.key));
-
-  // If the API is unreachable, show nothing rather than a broken placeholder.
-  if (failed) return null;
+  const data: Partial<Metrics> | null = failed ? FALLBACK : metrics;
+  const shown = items.filter(i => !hide.includes(i.key) && (!failed || FALLBACK[i.key] !== undefined));
 
   return (
-    <div className={`grid gap-4 ${compact ? 'grid-cols-1' : 'sm:grid-cols-3'}`}>
+    <div className={compact ? 'grid gap-4 grid-cols-1' : 'flex flex-wrap gap-4'}>
       {shown.map(({ key, label, icon, tone }) => (
-        <div key={key} className="glass card-hover rounded-2xl p-6 flex items-center gap-4">
+        <div key={key} className={`glass card-hover rounded-2xl p-6 flex items-center gap-4 ${compact ? '' : 'flex-1 min-w-[230px]'}`}>
           <div className={`h-12 w-12 shrink-0 rounded-xl bg-gradient-to-br ${tone} flex items-center justify-center text-xl shadow-soft`}>
             {icon}
           </div>
           <div>
             <div className="text-3xl font-extrabold tracking-tight text-slate-900 tabular-nums">
-              {metrics ? <CountUp target={metrics[key] ?? 0} /> : <span className="inline-block h-8 w-20 rounded bg-slate-200 animate-pulse" />}
+              {data ? <CountUp target={data[key] ?? 0} /> : <span className="inline-block h-8 w-20 rounded bg-slate-200 animate-pulse" />}
             </div>
             <div className="text-sm text-slate-500">{label}</div>
           </div>
