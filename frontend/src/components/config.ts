@@ -1,3 +1,7 @@
 // config.ts
-export const API_BASE: string = "http://localhost:5050";
-//export const API_BASE: string = "https://finalresearchhelper-production.up.railway.app";
+// Set VITE_API_BASE in Vercel (or frontend/.env.local for local dev) to override.
+export const API_BASE: string =
+  import.meta.env.VITE_API_BASE ??
+  (import.meta.env.DEV
+    ? "http://localhost:5050"
+    : "https://finalresearchhelper-production.up.railway.app");

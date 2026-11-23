@@ -43,7 +43,13 @@ app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "change-me")
 
 CORS(
     app,
-    origins=["http://localhost:5173", "https://researchconnectai.com", "https://www.researchconnectai.com"],
+    origins=[
+        "http://localhost:5173",
+        "https://researchconnectai.com",
+        "https://www.researchconnectai.com",
+        "https://researchconnectai.org",
+        "https://www.researchconnectai.org",
+    ],
     supports_credentials=True
 )
 
