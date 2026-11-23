@@ -11,6 +11,11 @@ const words = [
   'Ally.',
 ];
 
+const impact = [
+  { value: '500+', label: 'Students have used ResearchConnect' },
+  { value: '2,500+', label: 'Colleges and universities reached' },
+];
+
 const features: Feature[] = [
   {
     title: 'Smart Matching',
@@ -94,6 +99,20 @@ const HomePage: React.FC = () => {
                 Learn More
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Impact Section */}
+      <div className="py-12">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid sm:grid-cols-2 gap-8 text-center">
+            {impact.map((item) => (
+              <div key={item.label} className="glass p-8 rounded-2xl shadow-lg">
+                <div className="text-5xl font-bold gradient-text mb-2">{item.value}</div>
+                <p className="text-gray-600">{item.label}</p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
