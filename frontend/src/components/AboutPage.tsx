@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { API_BASE } from './config.ts';
+import React from 'react';
+import ImpactStats from './ImpactStats';
 import { TeamMember } from '../types';
 
 // Import all team member images
@@ -42,35 +42,9 @@ const teamMembers: TeamMember[] = [
   }
 ];
 
-type Metrics = {
-  students_connected: number;
-  universities_covered: number;
-  faculty_contacts: number;
-};
-
 const AboutPage: React.FC = () => {
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    // Fetch current metrics to render (visit is tracked globally in App.tsx)
-    fetch(`${API_BASE}/metrics`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => { if (!cancelled) setMetrics(data); })
-      .catch(() => {
-        if (!cancelled) {
-          setMetrics({ students_connected: 0, universities_covered: 0, faculty_contacts: 0 });
-        }
-      });
-
-    return () => { cancelled = true; };
-  }, []);
-
-  const n = (v?: number) => (typeof v === 'number' ? v.toLocaleString() : '—');
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 pt-20">
+    <div className="min-h-screen page-bg pt-20">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
         <div className="text-center mb-16">
           <h1 className="text-5xl font-bold text-gray-900 mb-4">About ResearchConnect</h1>
@@ -90,28 +64,9 @@ const AboutPage: React.FC = () => {
             </p>
           </div>
 
-          <div className="glass p-8 rounded-2xl shadow-lg animate-slide-up">
-            <h3 className="text-2xl font-bold text-gray-900 mb-6">Our Impact</h3>
-            <div className="space-y-4">
-              <div className="flex items-center">
-                <div className="text-3xl font-bold text-blue-600 mr-4">
-                  {n(metrics?.students_connected)}+
-                </div>
-                <div className="text-gray-600">Students Connected</div>
-              </div>
-              <div className="flex items-center">
-                <div className="text-3xl font-bold text-purple-600 mr-4">
-                  {n(metrics?.universities_covered)}+
-                </div>
-                <div className="text-gray-600">Universities Covered</div>
-              </div>
-              <div className="flex items-center">
-                <div className="text-3xl font-bold text-green-600 mr-4">
-                  {n(metrics?.faculty_contacts)}+
-                </div>
-                <div className="text-gray-600">Faculty Contacts</div>
-              </div>
-            </div>
+          <div className="animate-slide-up">
+            <h3 className="text-2xl font-bold text-slate-900 mb-6">Our Impact</h3>
+            <ImpactStats compact />
           </div>
         </div>
 

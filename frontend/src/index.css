@@ -3,25 +3,46 @@
 @tailwind utilities;
 
 @layer base {
-  html {
-    scroll-behavior: smooth;
+  html { scroll-behavior: smooth; }
+  body {
+    @apply font-sans text-slate-800 antialiased bg-slate-50;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   }
+  ::selection { @apply bg-brand-200 text-brand-900; }
 }
 
 @layer components {
+  /* Cards */
   .glass {
-    @apply bg-white/80 backdrop-blur-sm border border-white/20;
+    @apply bg-white/80 backdrop-blur-md border border-slate-200/70 shadow-soft;
   }
-  
+  .card-hover {
+    @apply transition-all duration-300 hover:-translate-y-1 hover:shadow-lift;
+  }
+
   .gradient-text {
-    @apply bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-brand-600 via-violet-600 to-fuchsia-500 bg-clip-text text-transparent;
   }
-  
+
+  /* Buttons */
   .btn-primary {
-    @apply bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold py-3 px-6 rounded-lg hover:from-blue-700 hover:to-purple-700 transform hover:scale-105 transition-all duration-200 shadow-lg;
+    @apply inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-600 to-violet-600 text-white font-semibold py-3 px-6 rounded-xl
+           shadow-soft hover:shadow-lift hover:brightness-110 active:scale-[0.98] transition-all duration-200;
   }
-  
   .btn-secondary {
-    @apply border-2 border-gray-300 text-gray-700 font-semibold py-3 px-6 rounded-lg hover:border-blue-600 hover:text-blue-600 transform hover:scale-105 transition-all duration-200;
+    @apply inline-flex items-center justify-center gap-2 bg-white border border-slate-300 text-slate-700 font-semibold py-3 px-6 rounded-xl
+           hover:border-brand-500 hover:text-brand-600 hover:bg-brand-50 active:scale-[0.98] transition-all duration-200;
+  }
+
+  /* Page backdrop: soft mesh gradient */
+  .page-bg {
+    background:
+      radial-gradient(60rem 30rem at 85% -10%, rgba(139,92,246,.14), transparent 60%),
+      radial-gradient(50rem 30rem at -10% 10%, rgba(79,70,229,.12), transparent 60%),
+      radial-gradient(40rem 30rem at 50% 110%, rgba(236,72,153,.08), transparent 60%),
+      #f8fafc;
+  }
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-brand-200 bg-brand-50 px-3.5 py-1 text-xs font-semibold tracking-wide text-brand-700;
   }
 }

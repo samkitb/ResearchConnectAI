@@ -1031,31 +1031,54 @@ def find_professors():
 # Metrics Utilities
 # ========================================================
 
+# Historical usage from before account tracking began. Override in Railway with
+# METRICS_BASE_STUDENTS / METRICS_BASE_UNIVERSITIES / METRICS_BASE_FACULTY.
+def _base(name, default):
+    try:
+        return int(os.getenv(name, default))
+    except ValueError:
+        return int(default)
+
+_metrics_cache = {"t": 0, "data": None}
+
 @app.route("/metrics", methods=["GET"])
 def get_metrics():
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
+    """Impact numbers: historical baseline + live counts from the database.
+    Cached for 60s and never blocks on a slow/unreachable DB."""
+    import time
+    if _metrics_cache["data"] and time.time() - _metrics_cache["t"] < 60:
+        return jsonify(_metrics_cache["data"])
 
-    # Total students connected
-    cursor.execute("SELECT COUNT(*) AS total_students FROM users2")
-    total_students = cursor.fetchone()["total_students"]
-    total_students += 10
+    live = {"students": 0, "faculty": 0, "universities": 0}
+    live_ok = False
+    try:
+        conn = mysql.connector.connect(
+            host=os.getenv("DB_HOST"), user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"), database=os.getenv("DB_NAME"),
+            port=int(os.getenv("DB_PORT", "3306")), connection_timeout=4
+        )
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users2")
+        live["students"] = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM user_connections")
+        live["faculty"] = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(DISTINCT university) FROM user_connections")
+        live["universities"] = cur.fetchone()[0]
+        cur.close(); conn.close()
+        live_ok = True
+    except Exception as e:
+        print(f"[WARN] /metrics live counts unavailable: {e}")
+        if _metrics_cache["data"]:
+            return jsonify(_metrics_cache["data"])
 
-    # Faculty contacts
-    cursor.execute("SELECT COUNT(*) AS total_faculty FROM user_connections")
-    total_faculty = cursor.fetchone()["total_faculty"]
-
-    # Universities covered (distinct universities from user_connections)
-    cursor.execute("SELECT COUNT(DISTINCT university) AS total_universities FROM user_connections")
-    total_universities = cursor.fetchone()["total_universities"]
-
-    cursor.close()
-
-    return jsonify({
-        "students_connected": total_students,
-        "faculty_contacts": total_faculty,
-        "universities_covered": total_universities
-    })
+    data = {
+        "students_connected": _base("METRICS_BASE_STUDENTS", 500) + live["students"],
+        "universities_covered": max(_base("METRICS_BASE_UNIVERSITIES", 2500), live["universities"]),
+        "faculty_contacts": _base("METRICS_BASE_FACULTY", 0) + live["faculty"],
+    }
+    if live_ok:
+        _metrics_cache.update(t=time.time(), data=data)
+    return jsonify(data)
 
 
 
@@ -1192,7 +1215,8 @@ try:
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
         database=os.getenv("DB_NAME"),
-        port=int(os.getenv("DB_PORT", "3306"))
+        port=int(os.getenv("DB_PORT", "3306")),
+        connection_timeout=10
     )
     cursor = db.cursor()
 except Exception as _e:
@@ -1210,7 +1234,8 @@ def get_db():
             user=os.getenv("DB_USER"),
             password=os.getenv("DB_PASSWORD"),
             database=os.getenv("DB_NAME"),
-            port=int(os.getenv("DB_PORT", "3306"))
+            port=int(os.getenv("DB_PORT", "3306")),
+            connection_timeout=10
         )
     return db
 
