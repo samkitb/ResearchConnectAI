@@ -2,7 +2,7 @@
 
 A full-stack web application that helps students discover and connect with university professors for research opportunities. Search any university and field of study — GPT identifies relevant professors, OpenAlex enriches their profiles with real publications, and an AI email drafter helps you craft personalized outreach.
 
-**Live site:** [researchconnectai.com](https://researchconnectai.com)
+**Live site:** [researchconnectai.com](https://researchconnectai.org)
 
 ---
 
